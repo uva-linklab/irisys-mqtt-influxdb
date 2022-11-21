@@ -59,12 +59,16 @@ def on_message(client, userdata, msg):
 
     points = []
 
+    # Support older versions of python
+    ts = time.time() * 1000000000
+    # ts = time.time_ns() # 3.7+
+
     point_template = {
         "tags": {
             "device_id": device_id,
             "receiver": "influxdb-mqtt-irisys",
         },
-        "time": time.time_ns(),
+        "time": ts,
     }
 
     if data_type == "live_counts":
