@@ -125,7 +125,8 @@ client = mqtt.Client()
 client.on_connect = on_connect
 client.on_message = on_message
 
-client.tls_set()
+if int(mqtt_config["port"]) > 2000:
+    client.tls_set()
 client.username_pw_set(mqtt_config["username"], mqtt_config["password"])
 client.connect(mqtt_config["hostname"], int(mqtt_config["port"]), 60)
 
