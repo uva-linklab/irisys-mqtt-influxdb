@@ -44,6 +44,10 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe("irisys/#")
 
 
+# Keep a copy of the last values so we can re-submit the same values.
+saved_data = {}
+
+
 # The callback for when a PUBLISH message is received from the server.
 def on_message(client, userdata, msg):
     # print("{}: {}".format(msg.topic, str(msg.payload)))
@@ -77,6 +81,11 @@ def on_message(client, userdata, msg):
             val = count["count"]
             name = count["name"]
 
+            # Save this value.
+            if not device_id in saved_data:
+                saved_data[device_id] = {}
+            saved_data[device_id][name] = val
+
             point = copy.deepcopy(point_template)
 
             point["measurement"] = "vector_4d_count_test"
@@ -84,6 +93,21 @@ def on_message(client, userdata, msg):
             point["tags"]["register_name"] = name
 
             points.append(point)
+
+    elif data_type == "counts":
+        # Ignore whatever comes in this MQTT message. Just use this as an event
+        # to re-send the last data.
+
+        if device_id in saved_data:
+            print("resending for {}".format(device_id))
+            for name, val in saved_data[device_id].items():
+                point = copy.deepcopy(point_template)
+
+                point["measurement"] = "vector_4d_count_test"
+                point["fields"] = {"value": val}
+                point["tags"]["register_name"] = name
+
+                points.append(point)
 
     else:
         # Ignore all other topics for now.
