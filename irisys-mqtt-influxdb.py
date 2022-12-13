@@ -144,7 +144,7 @@ def on_message(client, userdata, msg):
 
             point = copy.deepcopy(point_template)
 
-            point["measurement"] = "vector_4d_count_test"
+            point["measurement"] = "vector_4d_count"
             point["fields"] = {"value": val}
             point["tags"]["register_name"] = name
 
@@ -162,13 +162,13 @@ def on_message(client, userdata, msg):
             # After compensating for count drift, calculate occupancy is just
             # subtracting the number of exits from the number of enters, and
             # then doing a simple sanity check that occupancy is not negative.
-            occupancy = enter - exit
+            occupancy = int(enter - exit)
             if occupancy < 0:
                 occupancy = 0
 
             # Save occupancy count point.
             point = copy.deepcopy(point_template)
-            point["measurement"] = "occupancy_count_test"
+            point["measurement"] = "occupancy_count"
             point["fields"] = {"value": occupancy}
             # Mark how we calculated this occupancy value.
             point["tags"]["method"] = "vector_4d"
@@ -179,7 +179,7 @@ def on_message(client, userdata, msg):
 
             # Save additional data for metadata and other reasons.
             point = copy.deepcopy(point_template)
-            point["measurement"] = "vector_4d_count_occupancy_test"
+            point["measurement"] = "vector_4d_count_occupancy"
             point["fields"] = {
                 "enter_offset": enter_offset,
                 "exit_offset": exit_offset,
@@ -207,14 +207,14 @@ def on_message(client, userdata, msg):
 
                 point = copy.deepcopy(point_template)
 
-                point["measurement"] = "vector_4d_count_test"
+                point["measurement"] = "vector_4d_count"
                 point["fields"] = {"value": val}
                 point["tags"]["register_name"] = name
 
                 points.append(point)
 
             point = copy.deepcopy(point_template)
-            point["measurement"] = "occupancy_count_test"
+            point["measurement"] = "occupancy_count"
             point["fields"] = {"value": state[device_id]["occupancy_count"]}
             # Mark how we calculated this occupancy value.
             point["tags"]["method"] = "vector_4d"
