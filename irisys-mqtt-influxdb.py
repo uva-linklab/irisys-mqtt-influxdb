@@ -44,8 +44,32 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe("irisys/#")
 
 
-# Keep a copy of the last values so we can re-submit the same values.
-saved_data = {}
+# This is not a stateless processor so we must save some state as we collect data.
+# This looks like:
+#
+#   state[<device_id>] = {
+#        "data": {
+#           "<count_name>": <count_value>
+#        },
+#        "occupancy_count": <count>,
+#        "offset": {
+#           "saved": bool,
+#           "data": {
+#               "<count_name>": <count_value>
+#           }
+#        }
+#   }
+#
+# We need to keep a copy of the last values so we can re-submit the same values.
+# We also keep an offset every night to reset the counters to 0. Mark when we
+# save the offset at ~4am so we only save it once.
+state = {}
+
+# # Keep a copy of the last values so we can re-submit the same values.
+# saved_data = {}
+
+# offset_saved = {}
+# offsets = {}
 
 
 # The callback for when a PUBLISH message is received from the server.
@@ -61,6 +85,14 @@ def on_message(client, userdata, msg):
     device_id = topic_fields[1]
     data_type = topic_fields[2]
 
+    # Init fields
+    if not device_id in state:
+        state[device_id] = {
+            "data": {},
+            "occupancy_count": 0,
+            "offset": {"saved": False, "data": {}},
+        }
+
     points = []
 
     # Support older versions of python
@@ -75,16 +107,40 @@ def on_message(client, userdata, msg):
         "time": ts,
     }
 
+    # By default we do not save the offset. We only save once per day at
+    # 4am.
+    save_offsets = False
+
+    # If it is newly 4am, we assume the room is empty and save the
+    # current counts as an offset.
+    if (
+        state[device_id]["offset"]["saved"] == False
+        and datetime.datetime.now().hour == 4
+    ):
+        # On this data packet we do want to save the current value as the offset
+        # to use for the next 24 hours when calculating occupancy.
+        save_offsets = True
+    elif datetime.datetime.now().hour == 5:
+        # At 5am (and for the entire hour) we reset our saved marker
+        state[device_id]["offset"]["saved"] = False
+
     if data_type == "live_counts":
         counts = json.loads(msg.payload.decode("utf-8"))
+
         for count in counts["counts"]:
             val = count["count"]
             name = count["name"]
 
             # Save this value.
-            if not device_id in saved_data:
-                saved_data[device_id] = {}
-            saved_data[device_id][name] = val
+            state[device_id]["data"][name] = val
+
+            # Optionally save this value as the offset. This case will likely
+            # never happen as we should not get a live count in the middle of
+            # the night. We should save this in the "counts" section below.
+            if save_offsets:
+                state[device_id]["offset"]["data"][name] = val
+                print("saving {}:{} for {} (live counts)".format(name, val, device_id))
+                state[device_id]["offset"]["saved"] = True
 
             point = copy.deepcopy(point_template)
 
@@ -94,13 +150,61 @@ def on_message(client, userdata, msg):
 
             points.append(point)
 
+        # We also want to calculate occupancy. We assume there will be two
+        # counts: "Enter" and "Exit".
+        if "Enter" in state[device_id]["data"] and "Exit" in state[device_id]["data"]:
+            enter_offset = state[device_id]["offset"]["data"].get("Enter", 0)
+            exit_offset = state[device_id]["offset"]["data"].get("Exit", 0)
+
+            enter = state[device_id]["data"]["Enter"] - enter_offset
+            exit = state[device_id]["data"]["Exit"] - exit_offset
+
+            # After compensating for count drift, calculate occupancy is just
+            # subtracting the number of exits from the number of enters, and
+            # then doing a simple sanity check that occupancy is not negative.
+            occupancy = enter - exit
+            if occupancy < 0:
+                occupancy = 0
+
+            # Save occupancy count point.
+            point = copy.deepcopy(point_template)
+            point["measurement"] = "occupancy_count_test"
+            point["fields"] = {"value": occupancy}
+            # Mark how we calculated this occupancy value.
+            point["tags"]["method"] = "vector_4d"
+            points.append(point)
+
+            # Save this occupancy count so we can re-send it.
+            state[device_id]["occupancy_count"] = occupancy
+
+            # Save additional data for metadata and other reasons.
+            point = copy.deepcopy(point_template)
+            point["measurement"] = "vector_4d_count_occupancy_test"
+            point["fields"] = {
+                "enter_offset": enter_offset,
+                "exit_offset": exit_offset,
+                "enter_count": state[device_id]["data"]["Enter"],
+                "exit_count": state[device_id]["data"]["Exit"],
+                "enter": enter,
+                "exit": exit,
+                "occupancy_raw": enter - exit,
+                "occupancy_count": occupancy,
+            }
+            points.append(point)
+
     elif data_type == "counts":
         # Ignore whatever comes in this MQTT message. Just use this as an event
         # to re-send the last data.
 
-        if device_id in saved_data:
-            print("resending for {}".format(device_id))
-            for name, val in saved_data[device_id].items():
+        if device_id in state:
+            # print("resending for {}".format(device_id))
+            for name, val in state[device_id]["data"].items():
+                # If we are saving offsets do that here.
+                if save_offsets:
+                    state[device_id]["offset"]["data"][name] = val
+                    print("saving {}:{} for {}".format(name, val, device_id))
+                    state[device_id]["offset"]["saved"] = True
+
                 point = copy.deepcopy(point_template)
 
                 point["measurement"] = "vector_4d_count_test"
@@ -108,6 +212,13 @@ def on_message(client, userdata, msg):
                 point["tags"]["register_name"] = name
 
                 points.append(point)
+
+            point = copy.deepcopy(point_template)
+            point["measurement"] = "occupancy_count_test"
+            point["fields"] = {"value": state[device_id]["occupancy_count"]}
+            # Mark how we calculated this occupancy value.
+            point["tags"]["method"] = "vector_4d"
+            points.append(point)
 
     else:
         # Ignore all other topics for now.
